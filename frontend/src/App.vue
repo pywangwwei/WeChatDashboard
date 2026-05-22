@@ -20,14 +20,6 @@
             <el-icon><ChatDotSquare /></el-icon>
             <span>群聊管理</span>
           </el-menu-item>
-          <el-menu-item index="/persons">
-            <el-icon><User /></el-icon>
-            <span>人员分析</span>
-          </el-menu-item>
-          <el-menu-item index="/messages">
-            <el-icon><Message /></el-icon>
-            <span>消息记录</span>
-          </el-menu-item>
           <el-menu-item index="/operations">
             <el-icon><TrendCharts /></el-icon>
             <span>运营看板</span>

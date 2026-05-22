@@ -18,16 +18,6 @@ const routes = [
     props: true,
   },
   {
-    path: '/persons',
-    name: 'persons',
-    component: () => import('@/views/Persons.vue'),
-  },
-  {
-    path: '/messages',
-    name: 'messages',
-    component: () => import('@/views/Messages.vue'),
-  },
-  {
     path: '/operations',
     name: 'operations',
     component: () => import('@/views/OperationsDashboard.vue'),
