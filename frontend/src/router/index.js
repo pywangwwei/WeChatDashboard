@@ -27,6 +27,31 @@ const routes = [
     name: 'groupManager',
     component: () => import('@/views/GroupManager.vue'),
   },
+  {
+    path: '/daily-board',
+    name: 'dailyBoard',
+    component: () => import('@/views/DailyBoard.vue'),
+  },
+  {
+    path: '/ai-analyze',
+    name: 'aiAnalyze',
+    component: () => import('@/views/AIAnalyze.vue'),
+  },
+  {
+    path: '/external-board',
+    name: 'externalBoard',
+    component: () => import('@/views/ExternalBoard.vue'),
+  },
+  {
+    path: '/person-board',
+    name: 'personBoard',
+    component: () => import('@/views/PersonBoard.vue'),
+  },
+  {
+    path: '/impact-board',
+    name: 'impactBoard',
+    component: () => import('@/views/ImpactBoard.vue'),
+  },
 ]
 
 const router = createRouter({

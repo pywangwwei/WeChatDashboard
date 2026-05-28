@@ -55,11 +55,25 @@
               连2天{{ c.internal.consecutive_2d }} / 连3天{{ c.internal.consecutive_3d }} / 连7天{{ c.internal.consecutive_7d }}
             </span>
           </template>
-          <el-table :data="c.internal.groups" size="small" stripe style="width: 100%" max-height="350">
+          <el-table :data="c.internal.groups" size="small" stripe style="width: 100%" max-height="280">
             <el-table-column prop="group_name" label="群名" min-width="160" />
             <el-table-column prop="max_consecutive_days" label="最长连续" width="80" />
             <el-table-column prop="monthly_active_days" label="活跃天数" width="80" />
           </el-table>
+          <!-- 当前周期活跃群 -->
+          <div style="margin-top:12px; padding-top:12px; border-top:1px solid #eee;">
+            <div style="font-size:13px; font-weight:bold; color:#409eff; margin-bottom:8px;">
+              🔥 {{ period === 'day' ? '今天' : '当前周期' }}活跃群 ({{ c.internal.today_active?.length || 0 }}个)
+            </div>
+            <div v-if="c.internal.today_active?.length">
+              <div v-for="g in c.internal.today_active" :key="g.room_id"
+                style="display:flex; justify-content:space-between; padding:4px 0; font-size:13px; border-bottom:1px solid #f5f5f5;">
+                <span style="color:#333; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ g.group_name }}</span>
+                <span style="color:#999; margin-left:8px; white-space:nowrap;">{{ g.message_count }}条</span>
+              </div>
+            </div>
+            <div v-else style="color:#999; font-size:13px; text-align:center; padding:8px;">今天暂无活跃内部群</div>
+          </div>
         </el-card>
       </el-col>
       <el-col :span="12">
@@ -70,11 +84,25 @@
               连2天{{ c.external.consecutive_2d }} / 连3天{{ c.external.consecutive_3d }} / 连7天{{ c.external.consecutive_7d }}
             </span>
           </template>
-          <el-table :data="c.external.groups" size="small" stripe style="width: 100%" max-height="350">
+          <el-table :data="c.external.groups" size="small" stripe style="width: 100%" max-height="280">
             <el-table-column prop="group_name" label="群名" min-width="160" />
             <el-table-column prop="max_consecutive_days" label="最长连续" width="80" />
             <el-table-column prop="monthly_active_days" label="活跃天数" width="80" />
           </el-table>
+          <!-- 外部群当天活跃 -->
+          <div style="margin-top:12px; padding-top:12px; border-top:1px solid #eee;">
+            <div style="font-size:13px; font-weight:bold; color:#67c23a; margin-bottom:8px;">
+              🔥 {{ period === 'day' ? '今天' : '当前周期' }}活跃群 ({{ c.external.today_active?.length || 0 }}个)
+            </div>
+            <div v-if="c.external.today_active?.length">
+              <div v-for="g in c.external.today_active" :key="g.room_id"
+                style="display:flex; justify-content:space-between; padding:4px 0; font-size:13px; border-bottom:1px solid #f5f5f5;">
+                <span style="color:#333; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ g.group_name }}</span>
+                <span style="color:#999; margin-left:8px; white-space:nowrap;">{{ g.message_count }}条</span>
+              </div>
+            </div>
+            <div v-else style="color:#999; font-size:13px; text-align:center; padding:8px;">今天暂无活跃外部群</div>
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -162,7 +190,7 @@ import axios from 'axios'
 export default {
   name: 'OperationsDashboard',
   setup() {
-    const period = ref('month')
+    const period = ref('day')
     const summary = ref({ internal: { active_groups: 0, total_messages: 0 }, external: { active_groups: 0, total_messages: 0 } })
     const continuity = ref({ internal: { groups: [], consecutive_2d: 0, consecutive_3d: 0, consecutive_7d: 0 }, external: { groups: [], consecutive_2d: 0, consecutive_3d: 0, consecutive_7d: 0 } })
     const dailySummary = ref([])

@@ -7,12 +7,21 @@ import os
 import sys
 import re
 import collections
+from sqlalchemy import or_, and_
+
+# ─── 部门白名单 ───
+# 用户只看"服务中心"和"数据库技术部"两大体系
+INCLUDE_DEPT_KEYWORDS = [
+    '售后', '交付', '支持', '驻场', '服务部',
+    'Oracle技术部', 'MySQL技术部', 'OceanBase技术部', 'PolarDB技术部', 'SQLServer技术部',
+]
+EXCLUDED_DEPT_KEYWORDS = ['生态合作', '生态支撑']
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc, text
+from sqlalchemy import func, desc, text, Integer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from models import init_db, get_db, Group, Person, Message, AnalysisResult
@@ -208,42 +217,216 @@ def list_messages(
 
 # ─── 发言者 API ───
 
+def _match_dept(dept_str):
+    """判断部门是否在白名单内"""
+    if not dept_str:
+        return False
+    subs = dept_str.split()
+    for s in subs:
+        for kw in EXCLUDED_DEPT_KEYWORDS:
+            if kw in s:
+                return False
+    for s in subs:
+        for kw in INCLUDE_DEPT_KEYWORDS:
+            if kw in s:
+                return True
+    return False
+
+
+def _dept_filter_sql():
+    """生成部门白名单SQL条件（用于统计SQL）"""
+    clauses = []
+    for kw in INCLUDE_DEPT_KEYWORDS:
+        clauses.append(f"p.department LIKE '%{kw}%'")
+    return "(" + " OR ".join(clauses) + ")"
+
+
 @app.get("/api/persons")
 def list_persons(
     is_internal: bool = None,
     sort_by: str = "total_messages",
     limit: int = 100,
+    days: int = None,
+    department: str = None,
+    silent_days: int = None,
+    real_name_only: bool = False,
+    departments: str = None,
     db: Session = Depends(get_db),
 ):
-    """人员列表"""
+    """人员列表（增强版：部门白名单+静默天数+日状态）"""
     q = db.query(Person).filter(Person.total_messages > 0)
     if is_internal is not None:
         q = q.filter(Person.is_internal == is_internal)
-    if sort_by == "total_messages":
-        q = q.order_by(Person.total_messages.desc())
-    elif sort_by == "last_seen":
-        q = q.order_by(Person.last_seen.desc().nullslast())
-    else:
-        q = q.order_by(Person.total_messages.desc())
 
-    persons = q.limit(limit).all()
+    # 部门白名单过滤
+    all_persons = q.all()
+    filtered = [p for p in all_persons if _match_dept(p.department)]
+
+    # 额外部门筛选（子部门多选）
+    if departments:
+        dept_list = [d.strip() for d in departments.split(',') if d.strip()]
+        if dept_list:
+            filtered = [p for p in filtered if any(
+                any(d in sub for sub in (p.department or '').split())
+                for d in dept_list
+            )]
+
+    if department:
+        filtered = [p for p in filtered if department in (p.department or '')]
+
+    if real_name_only:
+        # 只显示有中文名的（过滤OpenID）
+        filtered = [p for p in filtered if p.display_name and not p.display_name.startswith('wm')]
+
+    # 计算最近 days 天的发言日状态
+    now = datetime.datetime.utcnow()
+    days_val = days or 7
+    start = now - datetime.timedelta(days=days_val)
+
+    result = []
+    for p in filtered:
+        # 查询该人员的日发言情况
+        daily = db.query(
+            func.date(Message.msg_time).label("dt"),
+            func.count().label("cnt"),
+        ).filter(
+            Message.sender_id == p.user_id,
+            Message.msg_time >= start,
+        ).group_by(func.date(Message.msg_time)).all()
+
+        day_map = {r.dt: r.cnt for r in daily}
+
+        day_status = []
+        for i in range(days_val - 1, -1, -1):
+            d = (now - datetime.timedelta(days=i)).date()
+            cnt = day_map.get(str(d), 0)
+            day_status.append({
+                "date": str(d),
+                "count": cnt,
+                "active": cnt > 0,
+            })
+
+        # 计算连续静默天数
+        consecutive_silent = 0
+        for ds in reversed(day_status):
+            if not ds["active"]:
+                consecutive_silent += 1
+            else:
+                break
+
+        # 最近消息摘要
+        recent = db.query(Message).filter(
+            Message.sender_id == p.user_id,
+            Message.content_text.isnot(None),
+            Message.content_text != "",
+        ).order_by(Message.msg_time.desc()).limit(3).all()
+
+        recent_msgs = []
+        for m in recent:
+            gname = db.query(Group.group_name).filter(Group.room_id == m.room_id).scalar()
+            recent_msgs.append({
+                "time": m.msg_time.isoformat(),
+                "content": (m.content_text or '')[:80],
+                "group_name": gname or m.room_id[:12],
+            })
+
+        result.append({
+            "user_id": p.user_id,
+            "name": p.display_name or p.user_id,
+            "display_name": p.display_name or p.user_id,
+            "is_internal": p.is_internal,
+            "email": p.email,
+            "department": p.department,
+            "total_messages": p.total_messages,
+            "consecutive_silent_days": consecutive_silent,
+            "max_silent_days": consecutive_silent,
+            "day_status": day_status,
+            "recent_msgs": recent_msgs,
+            "first_seen": p.first_seen.isoformat() if p.first_seen else None,
+            "last_seen": p.last_seen.isoformat() if p.last_seen else None,
+        })
+
+    # silent_days过滤（必须在计算完day_status之后）
+    if silent_days:
+        result = [r for r in result if r["consecutive_silent_days"] >= silent_days]
+
+    # 排序
+    if sort_by == "total_messages":
+        result.sort(key=lambda x: -x["total_messages"])
+    elif sort_by == "last_seen":
+        result.sort(key=lambda x: x["last_seen"] or "", reverse=True)
+    elif sort_by == "consecutive_silent_days":
+        result.sort(key=lambda x: -x["consecutive_silent_days"])
+
+    result = result[:limit]
+
+    return {"total": len(result), "items": result}
+
+
+@app.get("/api/persons/stats")
+def get_person_stats(db: Session = Depends(get_db)):
+    """人员看板统计：内部/外部群的消息和群数TOP"""
+    now = datetime.datetime.utcnow()
+    start = now - datetime.timedelta(days=30)
+
+    # 获取所有人员
+    all_persons = db.query(Person).filter(Person.total_messages > 0).all()
+    internal_persons = [p for p in all_persons if p.is_internal and _match_dept(p.department)]
+    external_persons = [p for p in all_persons if not p.is_internal and _match_dept(p.department)]
+
+    def calc_top_speakers(persons, is_int, limit=20):
+        items = []
+        for p in persons:
+            cnt = db.query(func.count(Message.id)).filter(
+                Message.sender_id == p.user_id,
+                Message.msg_time >= start,
+            ).scalar() or 0
+            if cnt > 0:
+                items.append({"name": p.display_name or p.user_id, "msg_count": cnt, "user_id": p.user_id})
+        items.sort(key=lambda x: -x["msg_count"])
+        return items[:limit]
+
+    def calc_top_groupers(persons, is_int, limit=20):
+        items = []
+        for p in persons:
+            gcnt = db.query(func.count(func.distinct(Message.room_id))).filter(
+                Message.sender_id == p.user_id,
+                Message.msg_time >= start,
+            ).scalar() or 0
+            if gcnt > 0:
+                items.append({"name": p.display_name or p.user_id, "group_count": gcnt, "user_id": p.user_id})
+        items.sort(key=lambda x: -x["group_count"])
+        return items[:limit]
 
     return {
-        "total": len(persons),
-        "items": [
-            {
-                "user_id": p.user_id,
-                "display_name": p.display_name,
-                "is_internal": p.is_internal,
-                "email": p.email,
-                "department": p.department,
-                "total_messages": p.total_messages,
-                "first_seen": p.first_seen.isoformat() if p.first_seen else None,
-                "last_seen": p.last_seen.isoformat() if p.last_seen else None,
-            }
-            for p in persons
-        ],
+        "top_int_msgs": calc_top_speakers(internal_persons, True),
+        "top_ext_msgs": calc_top_speakers(external_persons, False),
+        "top_int_groups": calc_top_groupers(internal_persons, True),
+        "top_ext_groups": calc_top_groupers(external_persons, False),
     }
+
+
+@app.get("/api/persons/dept-list")
+def get_dept_list(db: Session = Depends(get_db)):
+    """获取所有可见部门的展平列表（多选下拉用）"""
+    raw = db.query(Person.department).filter(
+        Person.department.isnot(None),
+        Person.department != "",
+        Person.total_messages > 0,
+    ).distinct().all()
+
+    dept_set = set()
+    for (dept_str,) in raw:
+        for sub in dept_str.split():
+            for kw in INCLUDE_DEPT_KEYWORDS:
+                if kw in sub:
+                    for ek in EXCLUDED_DEPT_KEYWORDS:
+                        if ek in sub:
+                            break
+                    else:
+                        dept_set.add(sub)
+                    break
+    return {"items": sorted(dept_set)}
 
 
 @app.get("/api/persons/{user_id}")
@@ -848,6 +1031,91 @@ def groups_with_stats(db: Session = Depends(get_db)):
             "member_count": g.member_count,
         })
     return {"groups": result}
+
+
+import requests as http_requests
+
+@app.post("/api/ai-analyze-group")
+def ai_analyze_group(group_name: str = Query(""), start_date: str = Query(""), end_date: str = Query(""), db: Session = Depends(get_db)):
+    if not group_name:
+        return {"error": "缺少群名称", "analysis": ""}
+
+    # 查找群
+    group = db.query(Group).filter(Group.group_name == group_name).first()
+    if not group:
+        return {"error": f"未找到群: {group_name}", "analysis": ""}
+
+    # 获取消息
+    messages = db.query(Message).filter(
+        Message.room_id == group.room_id,
+        Message.msg_type == 'text',
+        Message.content_text != '',
+    )
+    if start_date:
+        messages = messages.filter(Message.msg_time >= start_date)
+    if end_date:
+        messages = messages.filter(Message.msg_time <= end_date + " 23:59:59")
+    messages = messages.order_by(Message.msg_time.asc()).limit(200).all()
+
+    if not messages:
+        return {"error": "该时间范围内无文本消息", "analysis": "", "group_name": group_name, "message_count": 0, "start_date": start_date, "end_date": end_date}
+
+    # 提取消息文本
+    msg_texts = []
+    for m in messages:
+        sender = m.sender_id or ""
+        ct = (m.content_text or "")[:300]
+        t = m.msg_time.strftime("%m/%d %H:%M") if m.msg_time else ""
+        msg_texts.append(f"[{t}] {sender}: {ct}")
+
+    prompt = f"""你是一个企业微信售后群分析助手。请分析以下售后群的聊天记录，按以下结构输出：
+
+## 群概况
+- 群名称：{group_name}
+- 分析周期：{start_date} ~ {end_date}
+- 消息总数：{len(messages)}条（显示前200条）
+
+## 核心问题
+列出群内讨论的主要技术问题和业务诉求，每个问题附上发生时间，按重要程度排序
+
+## 处理进展
+各问题的当前处理状态（已解决/处理中/待确认）
+
+## 客户情绪与满意度
+整体情绪判断，关注点变化
+
+## 建议下一步行动
+建议售后团队应该重点跟进的事项
+
+---
+聊天记录：
+{chr(10).join(msg_texts[-150:])}"""
+
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY", "sk-e7b43c8a754b469daa50bca3146e0109")
+        r = http_requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 2048,
+            },
+            timeout=120,
+        )
+        r.raise_for_status()
+        analysis = r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {"error": f"AI分析请求失败: {str(e)}", "analysis": "", "group_name": group_name, "message_count": len(messages), "start_date": start_date, "end_date": end_date}
+
+    return {
+        "group_name": group_name,
+        "analysis": analysis,
+        "message_count": len(messages),
+        "start_date": start_date,
+        "end_date": end_date,
+    }
 
 
 if __name__ == "__main__":

@@ -28,10 +28,30 @@
             <el-icon><Edit /></el-icon>
             <span>群管理</span>
           </el-menu-item>
+          <el-menu-item index="/daily-board">
+            <el-icon><DataAnalysis /></el-icon>
+            <span>当日看板</span>
+          </el-menu-item>
+          <el-menu-item index="/external-board">
+            <el-icon><Link /></el-icon>
+            <span>外部售后群</span>
+          </el-menu-item>
+          <el-menu-item index="/person-board">
+            <el-icon><User /></el-icon>
+            <span>人员看板</span>
+          </el-menu-item>
+          <el-menu-item index="/impact-board">
+            <el-icon><WarningFilled /></el-icon>
+            <span>影响业务群</span>
+          </el-menu-item>
+          <el-menu-item index="/ai-analyze">
+            <el-icon><MagicStick /></el-icon>
+            <span>AI群分析</span>
+          </el-menu-item>
         </el-menu>
       </el-aside>
       <el-main>
-        <router-view />
+        <router-view :key="route.path" />
       </el-main>
     </el-container>
   </div>

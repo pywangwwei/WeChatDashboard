@@ -111,6 +111,21 @@ class IssueTicket(Base):
     created_at = sa.Column(sa.DateTime, default=datetime.datetime.utcnow)
 
 
+class PersonBoard(Base):
+    """人员看板（组织架构+活跃状态）"""
+    __tablename__ = "person_board"
+
+    id = sa.Column(sa.Integer, primary_key=True, autoincrement=True)
+    user_id = sa.Column(sa.String(128), unique=True, nullable=False, index=True)
+    name = sa.Column(sa.String(128), default="")
+    dept_name = sa.Column(sa.String(64), default="")
+    dept_path = sa.Column(sa.String(256), default="")
+    is_service_center = sa.Column(sa.Boolean, default=False)
+    is_db_tech = sa.Column(sa.Boolean, default=False)
+    created_at = sa.Column(sa.DateTime, default=datetime.datetime.utcnow)
+    updated_at = sa.Column(sa.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
 def init_db():
     """初始化数据库，创建所有表"""
     os.makedirs("data", exist_ok=True)
